@@ -5,6 +5,7 @@ import '../../core/models/file_item.dart';
 import '../../features/auth/auth_bloc.dart';
 import 'vault_bloc.dart';
 import 'file_card.dart';
+import 'file_preview_screen.dart';
 
 class VaultScreen extends StatelessWidget {
   const VaultScreen({super.key});
@@ -26,45 +27,68 @@ class _VaultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocConsumer<VaultBloc, VaultState>(
+    return BlocListener<AuthBloc, AuthState>(
       listener: (context, state) {
-        if (state is VaultError) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(children: [
-                const Icon(Icons.error_outline_rounded,
-                    color: Color(0xFFEF4444), size: 18),
-                const SizedBox(width: 10),
-                Expanded(child: Text(state.message)),
-              ]),
-            ),
-          );
+        if (state is AuthInitial) {
+          Navigator.pushReplacementNamed(context, '/login');
         }
-        if (state is VaultOperationSuccess) {
+        if (state is AuthFailure) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(children: [
-                const Icon(Icons.check_circle_outline_rounded,
-                    color: Color(0xFF10B981), size: 18),
-                const SizedBox(width: 10),
-                Text(state.message),
-              ]),
-            ),
+            SnackBar(content: Text(state.message)),
           );
         }
       },
-      builder: (context, state) {
-        return Scaffold(
-          backgroundColor: const Color(0xFF0A0E1A),
-          body: CustomScrollView(
-            slivers: [
-              _buildAppBar(context),
-              _buildBody(context, state),
-            ],
-          ),
-          floatingActionButton: _buildFab(context, state),
-        );
-      },
+      child: BlocConsumer<VaultBloc, VaultState>(
+        listener: (context, state) {
+          if (state is VaultError) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(children: [
+                  const Icon(Icons.error_outline_rounded,
+                      color: Color(0xFFEF4444), size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(state.message)),
+                ]),
+              ),
+            );
+          }
+          if (state is VaultOperationSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(children: [
+                  const Icon(Icons.check_circle_outline_rounded,
+                      color: Color(0xFF10B981), size: 18),
+                  const SizedBox(width: 10),
+                  Text(state.message),
+                ]),
+              ),
+            );
+          }
+          if (state is VaultPreviewReady) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => FilePreviewScreen(
+                  bytes: state.bytes,
+                  filename: state.filename,
+                ),
+              ),
+            );
+          }
+        },
+        builder: (context, state) {
+          return Scaffold(
+            backgroundColor: const Color(0xFF0A0E1A),
+            body: CustomScrollView(
+              slivers: [
+                _buildAppBar(context),
+                _buildBody(context, state),
+              ],
+            ),
+            floatingActionButton: _buildFab(context, state),
+          );
+        },
+      ),
     );
   }
 
@@ -130,17 +154,40 @@ class _VaultView extends StatelessWidget {
                           ),
                         ],
                       ),
-                      // Logout
-                      IconButton(
-                        icon: const Icon(Icons.logout_rounded,
-                            color: Color(0xFF64748B)),
-                        tooltip: 'Sign out',
-                        onPressed: () {
-                          context
-                              .read<AuthBloc>()
-                              .add(LogoutRequested());
-                          Navigator.pushReplacementNamed(context, '/login');
+                      // Actions Menu
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF64748B)),
+                        color: const Color(0xFF1A2235),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        onSelected: (value) {
+                          if (value == 'logout') {
+                            context.read<AuthBloc>().add(LogoutRequested());
+                          } else if (value == 'delete') {
+                            _confirmDeleteAccount(context);
+                          }
                         },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'logout',
+                            child: Row(
+                              children: [
+                                const Icon(Icons.logout_rounded, color: Color(0xFF64748B), size: 20),
+                                const SizedBox(width: 12),
+                                Text('Logout', style: GoogleFonts.inter(color: Colors.white)),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                const Icon(Icons.delete_forever_rounded, color: Color(0xFFEF4444), size: 20),
+                                const SizedBox(width: 12),
+                                Text('Delete Account', style: GoogleFonts.inter(color: Color(0xFFEF4444))),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -336,6 +383,45 @@ class _VaultView extends StatelessWidget {
                   .add(DeleteFileRequested(file.id));
             },
             child: Text('Delete',
+                style: GoogleFonts.inter(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteAccount(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2235),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Delete Account',
+            style: GoogleFonts.inter(
+                color: Colors.white, fontWeight: FontWeight.w700)),
+        content: Text(
+          'Are you absolutely sure? This will PERMANENTLY delete your account and all your encrypted files.\n\nThis action cannot be undone.',
+          style: GoogleFonts.inter(color: const Color(0xFF94A3B8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel',
+                style: GoogleFonts.inter(color: const Color(0xFF6366F1))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              context
+                  .read<AuthBloc>()
+                  .add(AccountDeletionRequested());
+            },
+            child: Text('Permanently Delete',
                 style: GoogleFonts.inter(color: Colors.white)),
           ),
         ],

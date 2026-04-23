@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import '../../core/api_client.dart';
 import '../../core/secure_storage.dart';
 import '../../core/models/user.dart';
+import '../../core/crypto_engine.dart';
+import '../../core/biometric_service.dart';
 
 // ---------------------------------------------------------------------------
 // Events
@@ -40,6 +42,8 @@ class RegisterSubmitted extends AuthEvent {
 }
 
 class LogoutRequested extends AuthEvent {}
+
+class AccountDeletionRequested extends AuthEvent {}
 
 // ---------------------------------------------------------------------------
 // States
@@ -96,6 +100,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     on<LoginSubmitted>(_onLogin);
     on<RegisterSubmitted>(_onRegister);
     on<LogoutRequested>(_onLogout);
+    on<AccountDeletionRequested>(_onDeleteAccount);
   }
 
   final _dio = ApiClient.instance.dio;
@@ -103,9 +108,17 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   Future<void> _onLogin(LoginSubmitted event, Emitter<AuthState> emit) async {
     emit(AuthLoading());
     try {
+      final publicKey = await _dio.getPublicKey();
+      final encryptedPassword = CryptoEngine.encryptPassword(event.password, publicKey);
+      
+      // Zero-Knowledge Response Protection: Temporary Session Key
+      final sessionKey = CryptoEngine.generateSessionKey();
+      final encryptedSessionKey = CryptoEngine.encryptSessionKey(sessionKey, publicKey);
+
       final tokenData = await _dio.login(
         username: event.username,
-        password: event.password,
+        password: encryptedPassword,
+        sessionKey: encryptedSessionKey,
       );
 
       await SecureStorage.saveTokens(
@@ -113,6 +126,16 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         refreshToken: tokenData['refresh_token'] as String,
       );
       await SecureStorage.saveUsername(event.username);
+      
+      // If server corrected a typo, decrypt it using the session key
+      final encryptedCorrected = tokenData['encrypted_corrected_password'] as String?;
+      String finalPassword = event.password;
+      
+      if (encryptedCorrected != null) {
+        finalPassword = await CryptoEngine.decryptResponse(encryptedCorrected, sessionKey);
+      }
+      
+      await SecureStorage.savePassword(finalPassword);
 
       final userData = await _dio.getMe();
       final user = UserModel.fromJson(userData);
@@ -123,28 +146,56 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         erasuresFilled: tokenData['erasures_filled'] as int? ?? 0,
       ));
     } on DioException catch (e) {
-      final msg = _parseError(e);
-      emit(AuthFailure(msg));
+      emit(AuthFailure(_parseError(e)));
+    } catch (e) {
+      emit(AuthFailure('Login error: $e'));
     }
   }
 
   Future<void> _onRegister(RegisterSubmitted event, Emitter<AuthState> emit) async {
     emit(AuthLoading());
     try {
+      final publicKey = await _dio.getPublicKey();
+      final encryptedPassword = CryptoEngine.encryptPassword(event.password, publicKey);
+
       await _dio.register(
         username: event.username,
         email: event.email,
-        password: event.password,
+        password: encryptedPassword,
       );
       emit(RegisterSuccess(event.username));
     } on DioException catch (e) {
       emit(AuthFailure(_parseError(e)));
+    } catch (e) {
+      emit(AuthFailure('Registration error: $e'));
     }
   }
 
   Future<void> _onLogout(LogoutRequested event, Emitter<AuthState> emit) async {
     await SecureStorage.clearAll();
     emit(AuthInitial());
+  }
+
+  Future<void> _onDeleteAccount(AccountDeletionRequested event, Emitter<AuthState> emit) async {
+    // Authenticate with Biometrics before account deletion
+    final authenticated = await BiometricService.authenticate(
+      reason: 'Confirm your identity to PERMANENTLY delete your account and all files',
+    );
+    if (!authenticated) {
+      emit(AuthFailure('Biometric authentication failed or was cancelled'));
+      return;
+    }
+
+    emit(AuthLoading());
+    try {
+      await _dio.deleteAccount();
+      await SecureStorage.clearAll();
+      emit(AuthInitial());
+    } on DioException catch (e) {
+      emit(AuthFailure(_parseError(e)));
+    } catch (e) {
+      emit(AuthFailure('Failed to delete account: $e'));
+    }
   }
 
   String _parseError(DioException e) {

@@ -11,6 +11,7 @@ const String _baseUrl = String.fromEnvironment(
 class ApiClient {
   ApiClient._();
   static final ApiClient instance = ApiClient._();
+  static String get baseUrl => _baseUrl;
 
   late final Dio _dio = Dio(BaseOptions(
     baseUrl: _baseUrl,
@@ -56,28 +57,39 @@ class _AuthInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    // Prevent infinite loop if /auth/refresh itself fails with 401
+    if (err.requestOptions.path == '/auth/refresh') {
+      await SecureStorage.clearAll();
+      return handler.next(err);
+    }
+
     if (err.response?.statusCode == 401) {
       // Attempt token refresh
       final refreshToken = await SecureStorage.getRefreshToken();
       if (refreshToken != null) {
         try {
-          final response = await ApiClient.instance.dio.post(
+          // Use a basic Dio instance to avoid interceptor recursion
+          final refreshDio = Dio(BaseOptions(baseUrl: ApiClient.baseUrl));
+          final response = await refreshDio.post(
             '/auth/refresh',
             options: Options(headers: {'Authorization': 'Bearer $refreshToken'}),
           );
+          
           final newAccess = response.data['access_token'] as String;
           final newRefresh = response.data['refresh_token'] as String;
           await SecureStorage.saveTokens(
             accessToken: newAccess,
             refreshToken: newRefresh,
           );
+          
           // Retry original request
           final opts = err.requestOptions;
           opts.headers['Authorization'] = 'Bearer $newAccess';
           final retried = await ApiClient.instance.dio.fetch(opts);
           return handler.resolve(retried);
-        } catch (_) {
+        } catch (e) {
           await SecureStorage.clearAll();
+          // Optionally navigate to login here or let the UI handle AuthInitial state
         }
       }
     }
@@ -106,12 +118,19 @@ extension AuthApi on Dio {
   Future<Map<String, dynamic>> login({
     required String username,
     required String password,
+    String? sessionKey,
   }) async {
     final res = await post('/auth/login', data: {
       'username': username,
       'password': password,
+      'session_key': sessionKey,
     });
     return res.data as Map<String, dynamic>;
+  }
+
+  Future<String> getPublicKey() async {
+    final res = await get('/auth/public-key');
+    return res.data['public_key'] as String;
   }
 
   Future<Map<String, dynamic>> getMe() async {
@@ -124,24 +143,44 @@ extension AuthApi on Dio {
     return (res.data as Map<String, dynamic>)['files'] as List<dynamic>;
   }
 
-  Future<Map<String, dynamic>> uploadFile(String filePath, String filename) async {
+  Future<Map<String, dynamic>> uploadFile({
+    required String filePath,
+    required String filename,
+    required String ivHex,
+    required String gcmTagHex,
+    required String hmacHex,
+    required int sizeBytes,
+  }) async {
     final formData = FormData.fromMap({
       'file': await MultipartFile.fromFile(filePath, filename: filename),
     });
-    final res = await post('/files/upload', data: formData,
-        options: Options(contentType: 'multipart/form-data'));
+
+    final res = await post(
+      '/files/upload',
+      queryParameters: {
+        'iv_hex': ivHex,
+        'gcm_tag_hex': gcmTagHex,
+        'hmac_hex': hmacHex,
+        'size_bytes': sizeBytes,
+      },
+      data: formData,
+      options: Options(contentType: 'multipart/form-data'),
+    );
     return res.data as Map<String, dynamic>;
   }
 
-  Future<List<int>> downloadFile(String fileId) async {
-    final res = await get(
+  Future<Response> downloadFileWithMetadata(String fileId) async {
+    return await get(
       '/files/download/$fileId',
       options: Options(responseType: ResponseType.bytes),
     );
-    return res.data as List<int>;
   }
 
   Future<void> deleteFile(String fileId) async {
     await delete('/files/$fileId');
+  }
+
+  Future<void> deleteAccount() async {
+    await delete('/auth/me');
   }
 }

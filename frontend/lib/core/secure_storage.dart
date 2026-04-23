@@ -11,6 +11,7 @@ class SecureStorage {
   static const _keyAccess = 'sc_access_token';
   static const _keyRefresh = 'sc_refresh_token';
   static const _keyUsername = 'sc_username';
+  static const _keyPassword = 'sc_password';
 
   static Future<void> saveTokens({
     required String accessToken,
@@ -28,6 +29,10 @@ class SecureStorage {
   static Future<void> saveUsername(String username) =>
       _storage.write(key: _keyUsername, value: username);
   static Future<String?> getUsername() => _storage.read(key: _keyUsername);
+
+  static Future<void> savePassword(String password) =>
+      _storage.write(key: _keyPassword, value: password);
+  static Future<String?> getPassword() => _storage.read(key: _keyPassword);
 
   static Future<bool> isLoggedIn() async {
     final token = await getAccessToken();

@@ -54,38 +54,29 @@ def _user_file_key(user: User) -> bytes:
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_file(
     file: UploadFile = FastAPIFile(...),
+    iv_hex: str = "",
+    gcm_tag_hex: str = "",
+    hmac_hex: str = "",
+    size_bytes: int = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Encrypt and upload a file to cloud storage.
-
-    1. Read file bytes (enforces 100 MB limit).
-    2. Compute HMAC-SHA256 of plaintext for integrity guard.
-    3. Encrypt with AES-256-GCM using the user's derived key.
-    4. Upload ciphertext to Firebase Storage.
-    5. Persist file metadata to the DB.
+    Upload a pre-encrypted file and its metadata.
+    The server does NOT encrypt; it just stores what the client sends.
     """
     raw_bytes = await file.read()
     if len(raw_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum size of {MAX_UPLOAD_BYTES // (1024*1024)} MB",
+            detail="File too large",
         )
-
-    key = _user_file_key(current_user)
-
-    # HMAC of plaintext
-    plaintext_hmac = generate_hmac(raw_bytes, current_user.hmac_key())
-
-    # Encrypt
-    ciphertext, iv, gcm_tag = encrypt_file(raw_bytes, key)
 
     # Storage key (user-namespaced path)
     storage_key = make_storage_key(current_user.id, file.filename or "unnamed")
 
-    # Upload to Firebase/S3
-    await upload_bytes(storage_key, ciphertext)
+    # Upload to Storage (Firebase or Local)
+    await upload_bytes(storage_key, raw_bytes)
 
     # Detect MIME type
     mime, _ = mimetypes.guess_type(file.filename or "")
@@ -96,14 +87,19 @@ async def upload_file(
         user_id=current_user.id,
         filename=file.filename or "unnamed",
         mime_type=mime,
-        size_bytes=len(raw_bytes),
+        size_bytes=size_bytes,
         storage_key=storage_key,
-        iv_hex=iv.hex(),
-        gcm_tag_hex=gcm_tag.hex(),
-        hmac_hex=plaintext_hmac.hex(),
+        iv_hex=iv_hex,
+        gcm_tag_hex=gcm_tag_hex,
+        hmac_hex=hmac_hex,
     )
     db.add(file_record)
-    await db.flush()
+    await db.commit()
+    await db.refresh(file_record)
+
+    # Trigger admin update
+    from .admin import manager
+    await manager.broadcast_update(db)
 
     return UploadResponse(
         file_id=file_record.id,
@@ -141,13 +137,7 @@ async def download_file(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Decrypt and stream a file.
-
-    1. Fetch file record; verify ownership.
-    2. Download ciphertext from storage.
-    3. Decrypt with AES-256-GCM (authenticates tag → rejects tampered data).
-    4. Verify HMAC-SHA256 of plaintext against stored value (integrity guard).
-    5. Stream plaintext to client.
+    Fetch an encrypted file and its metadata for the client to decrypt.
     """
     result = await db.execute(
         select(File).where(File.id == file_id, File.user_id == current_user.id)
@@ -156,39 +146,19 @@ async def download_file(
     if file_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
 
-    key = _user_file_key(current_user)
-
     # Download ciphertext
     ciphertext = await download_bytes(file_record.storage_key)
 
-    # Decrypt (AES-GCM tag check is performed inside decrypt_file)
-    try:
-        plaintext = decrypt_file(
-            ciphertext,
-            key,
-            bytes.fromhex(file_record.iv_hex),
-            bytes.fromhex(file_record.gcm_tag_hex),
-        )
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Decryption failed: file may be corrupted or key mismatch",
-        )
-
-    # HMAC integrity guard
-    if not verify_hmac(plaintext, current_user.hmac_key(), bytes.fromhex(file_record.hmac_hex)):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="HMAC verification failed: access denied",
-        )
-
     headers = {
         "Content-Disposition": f'attachment; filename="{file_record.filename}"',
-        "Content-Length": str(len(plaintext)),
+        "Content-Length": str(len(ciphertext)),
+        "X-IV": file_record.iv_hex,
+        "X-Tag": file_record.gcm_tag_hex,
+        "X-HMAC": file_record.hmac_hex,
     }
     return StreamingResponse(
-        io.BytesIO(plaintext),
-        media_type=file_record.mime_type,
+        io.BytesIO(ciphertext),
+        media_type="application/octet-stream",
         headers=headers,
     )
 
@@ -215,5 +185,10 @@ async def delete_file(
 
     # Remove from DB
     await db.delete(file_record)
+    await db.commit()
+
+    # Trigger admin update
+    from .admin import manager
+    await manager.broadcast_update(db)
 
     return DeleteResponse(message="File deleted successfully", file_id=file_id)

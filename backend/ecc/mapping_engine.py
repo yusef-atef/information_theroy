@@ -15,9 +15,10 @@ import hashlib
 import random
 
 
-# Printable ASCII characters used as the password alphabet.
+# Extended printable character set (includes standard ASCII + Latin-1 Supplement)
+# This allows symbols like '£', '€', etc.
 # We exclude the '*' wildcard (reserved for erasure notation).
-_PRINTABLE: list[int] = [c for c in range(32, 127) if c != ord('*')]
+_PRINTABLE: list[int] = [c for c in range(32, 256) if c != ord('*')]
 
 # Fixed password block length (padded/truncated before RS encoding).
 PASSWORD_BLOCK_LEN: int = 16

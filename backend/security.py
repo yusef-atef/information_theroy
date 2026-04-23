@@ -17,9 +17,13 @@ from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.hash import argon2
-from Crypto.Cipher import AES
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
 from Crypto.Random import get_random_bytes
+from dotenv import load_dotenv
 
+# Load configuration from .env file
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Configuration (override via environment variables in production)
@@ -30,9 +34,71 @@ ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 
 REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 # Server-side master key for encrypting mapping tables at rest.
-# Must be exactly 32 bytes (256-bit).  In production, store in a KMS / Vault.
 _RAW_MASTER_KEY: str = os.getenv("MASTER_KEY", "CHANGE_ME_MASTER_KEY_32_bytes_pad")
 MASTER_KEY: bytes = (_RAW_MASTER_KEY + " " * 32)[:32].encode()
+
+# RSA Key Pair for secure password transit
+# Loaded from environment variables (see .env file)
+SERVER_PRIVATE_KEY = os.getenv("SERVER_PRIVATE_KEY", "").replace("\\n", "\n")
+SERVER_PUBLIC_KEY = os.getenv("SERVER_PUBLIC_KEY", "").replace("\\n", "\n")
+
+if not SERVER_PRIVATE_KEY or not SERVER_PUBLIC_KEY:
+    # Fallback to hardcoded keys ONLY for development if env is not set
+    # (Keeping the ones from before as fallback for safety during migration)
+    SERVER_PRIVATE_KEY = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIEowIBAAKCAQEA2c3EYW28JK0C+RnUkHJaLwh8yhjLRKhWs0VaK8lPF2w206Iv\n"
+        "aOFP9oa8/KYiNgqJE444jrhr3gbIOAEOd7N58sURudhUO9Y9LHrF0iBnqw0FXyMM\n"
+        "too3vIUKK7mczaTyde1VuLuzcEzKwiF6r9rELaTYN1zOd/v6jfIZGVHBpcs9EHaO\n"
+        "aWxljKRl+KJ1z9PohEHTEe+TDIphS2dHJmse/Y7c5CfzQ20CRAUUTVIAmmY58qGi\n"
+        "BT3Xe/k0/BFVWsdS7bmq4Y4GDIEvHdc3d7s/gAzDPmyyC/v6AqB1hQSRGszH+l47\n"
+        "bhXmwek63WyXpdtPuMpvv7sOozeUiPvE2scQLwIDAQABAoIBAGzNXC05drOxk9sh\n"
+        "Wqzf2wpEyKXideRx3YHHgtB9y1tNjSPykJFpgJsL2uuxCEULxUc2FC3Dler/Y1SK\n"
+        "vpHwX9p1NLIsjYOotb17BUg/NNpfclAAv9COQmKT6S1Hlzupiw97BIf4iB5w1hbd\n"
+        "R58Cf163yuT5IRESGKuBBaW+0ChD7215NITQ5yvWsya1shtlInR+1Zr9nzMQ+mxI\n"
+        "NMljb5Pi49fIdR7j6IYSS2BJve2O+NgPO4YfCr6GflaXWmS7Vr89+CcWNQPA9Ikg\n"
+        "YXhT3EZB03kw8IgzL06xUHoyWsVO1EStg0aOzRWRdjHVs61jxxvHl9qM9QMOfQ+Q\n"
+        "t1sg7o0CgYEA64BElTbxlNE81STfnqiOk577zVRyP8L+44x0BL630VbvLTE1yAQn\n"
+        "kxsZO8OuBvra5Nlm+ZgeyydJOuAxsKh8vOmQql4zmWaOyRGttqHiiJPBMXg46knN\n"
+        "rXN29fYnnSlj+gXjVBflgI73TchBX5XWYFAIcU+JlhDwye3Xjv+xY4sCgYEA7MMl\n"
+        "c1OVme5KjSkY0FWEgcFaKi482wx1DpjQNjCyLnXKfxtmpEh4fxmir8gVIUUUrvLf\n"
+        "qknXyS0TX0oF5YsRFM44IzY87qX8d8oWcT/WezRL9mdcGJqIumK4AxAmFdzm4NvS\n"
+        "qKeaAkEsHPecnSwjgXVNe1Gv0ZDCcN5aJXGcym0CgYBmNQ4O4ICqgMDxFIbE2gy+\n"
+        "/sHz1FGdYKi04zE7Gfa3MQ6uw2u++iaezqT97igqOVck+UGa062Rp+Q9XC3UqNsy\n"
+        "NgAmIKouSndvxm9pEws5ET9IlA/Hhu5v9+vKReHdcKhGS6XkylY9nE6ygFX3ARXA\n"
+        "SRvQ6Z8h9Qo76TCjjE9VjwKBgQCI7E6jRIp3DB0nR8Ym7d4E4FoRnM3q7Ghh+bQo\n"
+        "Mr9JKSvjmGgiyBqPfrbcK700kWvlxWXeaHgXyy6x4/BHEMbfHmfOzVYtueapLEEQ\n"
+        "W5fhhpwLszjKrcw25lJ+yv8Lk8Yd8mMA0HS7qw8k7XowV09tVfZqRBKHAs3AUocV\n"
+        "sn+3fQKBgHBafDXuclkc6ZJmxmd5IfOu4kHKE75IP9XBF5DEsEwveOLjicKXyioJ\n"
+        "COXQxB/SYAa18Lo5PPq803NhxqgypZLiIaFsAszoSUcuy/GXrmLfCXdA544sAYE/\n"
+        "6iSefa0ETrC9/INnCAMEyZcJLIzgWp7ocuEdv7D9zKrQr26UHuwj\n"
+        "-----END RSA PRIVATE KEY-----\n"
+    )
+    SERVER_PUBLIC_KEY = (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2c3EYW28JK0C+RnUkHJa\n"
+        "Lwh8yhjLRKhWs0VaK8lPF2w206IvaOFP9oa8/KYiNgqJE444jrhr3gbIOAEOd7N5\n"
+        "8sURudhUO9Y9LHrF0iBnqw0FXyMMtoo3vIUKK7mczaTyde1VuLuzcEzKwiF6r9rE\n"
+        "LaTYN1zOd/v6jfIZGVHBpcs9EHaOaWxljKRl+KJ1z9PohEHTEe+TDIphS2dHJmse\n"
+        "/Y7c5CfzQ20CRAUUTVIAmmY58qGiBT3Xe/k0/BFVWsdS7bmq4Y4GDIEvHdc3d7s/\n"
+        "gAzDPmyyC/v6AqB1hQSRGszH+l47bhXmwek63WyXpdtPuMpvv7sOozeUiPvE2scQ\n"
+        "LwIDAQAB\n"
+        "-----END PUBLIC KEY-----\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RSA Utilities
+# ---------------------------------------------------------------------------
+
+def decrypt_password(encrypted_base64: str) -> str:
+    """Decrypt a password encrypted with the server's public key."""
+    try:
+        cipher_rsa = PKCS1_OAEP.new(RSA.import_key(SERVER_PRIVATE_KEY.encode('ascii')))
+        decrypted = cipher_rsa.decrypt(base64.b64decode(encrypted_base64))
+        return decrypted.decode('utf-8')
+    except Exception as e:
+        raise ValueError(f"Failed to decrypt password: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +256,25 @@ def decode_token(token: str) -> dict:
     Raises JWTError on invalid / expired tokens.
     """
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
+# ---------------------------------------------------------------------------
+# Session-based Response Encryption
+# ---------------------------------------------------------------------------
+
+def encrypt_response_data(plaintext: str, session_key_hex: str) -> str:
+    """
+    Encrypt a string using an AES session key.
+    Used to send corrected passwords back to the client securely.
+    The session_key_hex must be exactly 32 bytes (64 hex chars).
+    """
+    try:
+        key = bytes.fromhex(session_key_hex)
+        iv = get_random_bytes(16)
+        cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode('utf-8'))
+        # Result: iv || tag || ciphertext (all base64)
+        blob = iv + tag + ciphertext
+        return base64.b64encode(blob).decode('ascii')
+    except Exception as e:
+        raise ValueError(f"Response encryption failed: {e}")

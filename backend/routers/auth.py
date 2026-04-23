@@ -16,7 +16,6 @@ from jose import JWTError
 
 from backend.database import get_db
 from backend.models import User
-from backend.schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
 from backend.security import (
     hash_password,
     verify_password,
@@ -27,16 +26,30 @@ from backend.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    decrypt_password,
+    SERVER_PUBLIC_KEY,
+    encrypt_response_data,
 )
 from backend.ecc.ecc_auth import register_password, verify_and_correct
+from backend.schemas import (
+    RegisterRequest, 
+    LoginRequest, 
+    TokenResponse, 
+    UserResponse, 
+    PublicKeyResponse
+)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 bearer_scheme = HTTPBearer()
 
 
-# ---------------------------------------------------------------------------
-# Dependency — current user from JWT
-# ---------------------------------------------------------------------------
+@router.get("/public-key", response_model=PublicKeyResponse)
+async def get_public_key():
+    """Return the server's RSA public key for password encryption."""
+    return PublicKeyResponse(public_key=SERVER_PUBLIC_KEY)
+
+
+from sqlalchemy.orm import selectinload
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -55,27 +68,30 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User).options(selectinload(User.files)).where(User.id == user_id)
+    )
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return user
 
-
-# ---------------------------------------------------------------------------
-# Register
-# ---------------------------------------------------------------------------
-
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """
     Create a new SecureCorrect account.
-
-    - Generates a per-user GF(256) mapping table.
-    - Encodes the master password into a Reed-Solomon codeword.
-    - Stores the codeword + encrypted mapping + Argon2 hash.
+    Decrypts the incoming RSA-encrypted password first.
     """
+    password = decrypt_password(body.password)
+    
+    # Validation after decryption
+    if "*" in password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wildcards not allowed in registration")
+    if not (4 <= len(password) <= 16):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be between 4 and 16 characters")
+
     # Check username / email uniqueness
+    # ...
     existing = await db.execute(
         select(User).where(
             (User.username == body.username) | (User.email == str(body.email))
@@ -88,10 +104,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         )
 
     # ECC registration
-    bundle = register_password(body.password)
+    bundle = register_password(password)
 
     # Argon2 hash (integrity guard)
-    argon_hash = hash_password(body.password)
+    argon_hash = hash_password(password)
 
     # Encrypt mapping table at rest
     enc_mapping = encrypt_mapping(bundle.mapping_json)
@@ -109,26 +125,26 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         hmac_key_hex=hmac_key.hex(),
         key_salt_hex=key_salt.hex(),
     )
+    # 5. Commit
     db.add(user)
-    await db.flush()   # get the generated id before commit
+    await db.commit()
+    await db.refresh(user)
+
+    # Trigger admin update
+    from .admin import manager
+    await manager.broadcast_update(db)
 
     return user
 
 
-# ---------------------------------------------------------------------------
-# Login
-# ---------------------------------------------------------------------------
-
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
-    ECC-corrected login.
-
-    1. Fetch user record.
-    2. Run Reed-Solomon correction on the supplied password.
-    3. Verify the corrected password against the Argon2 hash (integrity guard).
-    4. If valid, return JWT access + refresh tokens.
+    ECC-corrected login with decrypted password.
     """
+    password = decrypt_password(body.password)
+    session_key_hex = decrypt_password(body.session_key) if body.session_key else None
+
     result = await db.execute(select(User).where(User.username == body.username))
     user = result.scalar_one_or_none()
 
@@ -138,7 +154,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     mapping_json = decrypt_mapping(user.encrypted_mapping) if user else "{}"
 
     correction = verify_and_correct(
-        input_password=body.password,
+        input_password=password,
         stored_codeword=codeword,
         mapping_json=mapping_json,
     )
@@ -159,11 +175,16 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     access_token = create_access_token(user.id, user.username)
     refresh_token = create_refresh_token(user.id)
 
+    encrypted_pw = None
+    if (correction.n_errors_corrected > 0 or correction.n_erasures_filled > 0) and session_key_hex:
+        encrypted_pw = encrypt_response_data(correction.corrected_password, session_key_hex)
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         corrections_applied=correction.n_errors_corrected,
         erasures_filled=correction.n_erasures_filled,
+        encrypted_corrected_password=encrypted_pw,
     )
 
 
@@ -174,6 +195,37 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Permanently delete the user account and all associated encrypted files.
+    Zero-Knowledge: Files are removed from storage before the account is purged.
+    """
+    from ..storage import delete_object
+
+    # 1. Delete physical files from storage
+    # We load files before deleting the user to get storage keys
+    for file_item in current_user.files:
+        try:
+            await delete_object(file_item.storage_key)
+        except Exception as e:
+            # Log error but continue with account deletion
+            print(f"Warning: Failed to delete physical file {file_item.storage_key}: {e}")
+
+    # 2. Delete user from database (cascades to file records)
+    await db.delete(current_user)
+    await db.commit()
+
+    # Trigger admin update
+    from .admin import manager
+    await manager.broadcast_update(db)
+
+    return None
 
 
 # ---------------------------------------------------------------------------

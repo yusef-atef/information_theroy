@@ -3,6 +3,7 @@ schemas.py — Pydantic v2 Request / Response Models
 """
 
 from datetime import datetime
+from typing import List, Optional, Any
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
@@ -14,21 +15,19 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64,
                           description="Unique username (3–64 chars)")
     email: EmailStr
-    password: str = Field(..., min_length=4, max_length=16,
-                          description="Master password (4–16 chars, no '*')")
+    password: str = Field(..., description="RSA-encrypted master password")
 
     @field_validator("password")
     @classmethod
     def no_wildcards_in_registration(cls, v: str) -> str:
-        if "*" in v:
-            raise ValueError("Wildcard '*' not allowed in registration password")
+        # Note: Validation of content now happens after decryption
         return v
 
 
 class LoginRequest(BaseModel):
     username: str
-    password: str = Field(..., max_length=16,
-                          description="Password, optionally with '*' erasure wildcards")
+    password: str = Field(..., description="RSA-encrypted password blob")
+    session_key: Optional[str] = Field(None, description="RSA-encrypted AES session key for secure response")
 
 
 class TokenResponse(BaseModel):
@@ -41,6 +40,8 @@ class TokenResponse(BaseModel):
     erasures_filled: int = Field(
         0, description="Number of wildcard positions that were filled by ECC"
     )
+    # Corrected password is now AES-encrypted with the session_key
+    encrypted_corrected_password: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -50,6 +51,10 @@ class UserResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PublicKeyResponse(BaseModel):
+    public_key: str
 
 
 # ---------------------------------------------------------------------------

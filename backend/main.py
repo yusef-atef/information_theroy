@@ -14,8 +14,10 @@ root_dir = Path(__file__).resolve().parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from backend.database import create_tables
-from backend.routers import auth, files
+from backend.routers import auth, files, admin
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +67,16 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(files.router)
+app.include_router(admin.router)
+
+# Mount static files for the Admin Panel
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+@app.get("/admin")
+async def get_admin_panel():
+    return FileResponse(str(STATIC_DIR / "admin.html"))
 
 
 # ---------------------------------------------------------------------------
