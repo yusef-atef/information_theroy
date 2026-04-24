@@ -209,29 +209,26 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildEccBudgetHint() {
-    final password = _passwordCtrl.text;
-    final erasures = '\\*'.allMatches(password.replaceAll('*', '\\*')).length;
-    final budget = (erasures >= 4)
-        ? '⚠ Erasure limit reached (4 max)'
-        : '✦ $erasures wildcard${erasures == 1 ? '' : 's'} used — '
-            '${4 - erasures} remaining / 2 error tolerance';
-
     return AnimatedBuilder(
       animation: _passwordCtrl,
       builder: (_, __) {
         final pw = _passwordCtrl.text;
+        final totalLen = pw.length;
+        final maxWildcards = totalLen < 8 ? 4 : (totalLen ~/ 4) * 2;
+        final maxErrors = maxWildcards ~/ 2;
+        
         final e = pw.split('').where((c) => c == '*').length;
-        final hint = (e >= 4)
-            ? '⚠  Erasure limit reached (4 max)'
+        final hint = (e >= maxWildcards)
+            ? '⚠  Erasure limit reached ($maxWildcards max)'
             : '✦  $e wildcard${e == 1 ? '' : 's'} — '
-                '${4 - e} remaining  ·  2 error tolerance';
+                '${maxWildcards - e} remaining  ·  $maxErrors error tolerance';
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             color: const Color(0xFF1E293B),
             border: Border.all(
-                color: e >= 4
+                color: e >= maxWildcards
                     ? const Color(0xFFEF4444).withOpacity(0.5)
                     : const Color(0xFF6366F1).withOpacity(0.3)),
           ),
@@ -239,7 +236,7 @@ class _LoginScreenState extends State<LoginScreen>
             hint,
             style: GoogleFonts.inter(
               fontSize: 12,
-              color: e >= 4 ? const Color(0xFFEF4444) : const Color(0xFF818CF8),
+              color: e >= maxWildcards ? const Color(0xFFEF4444) : const Color(0xFF818CF8),
             ),
           ),
         );

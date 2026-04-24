@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from backend.database import get_db
 from backend.models import User, File
-from backend.schemas import FileMetadata, FileListResponse, UploadResponse, DeleteResponse
+from backend.schemas import FileMetadata, FileListResponse, UploadResponse, DeleteResponse, DriveUploadRequest
 from backend.security import encrypt_file, decrypt_file, generate_hmac, verify_hmac, derive_key
 from backend.routers.auth import get_current_user
 from backend.storage import upload_bytes, download_bytes, delete_object, make_storage_key
@@ -108,6 +108,40 @@ async def upload_file(
     )
 
 
+@router.post("/upload/drive", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_drive_metadata(
+    body: DriveUploadRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Register a file that has already been uploaded to Google Drive.
+    """
+    file_record = File(
+        user_id=current_user.id,
+        filename=body.filename,
+        mime_type=body.mime_type or "application/octet-stream",
+        size_bytes=body.size_bytes,
+        google_file_id=body.google_file_id,
+        storage_key=None, # Not stored on our server
+        iv_hex=body.iv_hex,
+        gcm_tag_hex=body.gcm_tag_hex,
+        hmac_hex=body.hmac_hex,
+    )
+    db.add(file_record)
+    await db.commit()
+    await db.refresh(file_record)
+
+    from .admin import manager
+    await manager.broadcast_update(db)
+
+    return UploadResponse(
+        file_id=file_record.id,
+        filename=file_record.filename,
+        size_bytes=file_record.size_bytes,
+    )
+
+
 # ---------------------------------------------------------------------------
 # List
 # ---------------------------------------------------------------------------
@@ -138,6 +172,8 @@ async def download_file(
 ):
     """
     Fetch an encrypted file and its metadata for the client to decrypt.
+    If the file is on Google Drive, it returns metadata and expects the client
+    to fetch the bytes from Google.
     """
     result = await db.execute(
         select(File).where(File.id == file_id, File.user_id == current_user.id)
@@ -146,16 +182,26 @@ async def download_file(
     if file_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
 
-    # Download ciphertext
-    ciphertext = await download_bytes(file_record.storage_key)
-
     headers = {
         "Content-Disposition": f'attachment; filename="{file_record.filename}"',
-        "Content-Length": str(len(ciphertext)),
         "X-IV": file_record.iv_hex,
         "X-Tag": file_record.gcm_tag_hex,
         "X-HMAC": file_record.hmac_hex,
     }
+
+    if file_record.google_file_id:
+        # Client-side cloud storage: just return the ID
+        headers["X-Google-File-ID"] = file_record.google_file_id
+        return StreamingResponse(
+            io.BytesIO(b""), # Empty body, client pulls from Drive
+            media_type="application/octet-stream",
+            headers=headers,
+        )
+
+    # Legacy local/S3 storage
+    ciphertext = await download_bytes(file_record.storage_key)
+    headers["Content-Length"] = str(len(ciphertext))
+    
     return StreamingResponse(
         io.BytesIO(ciphertext),
         media_type="application/octet-stream",
@@ -180,8 +226,9 @@ async def delete_file(
     if file_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
 
-    # Remove from cloud storage
-    await delete_object(file_record.storage_key)
+    # Remove from cloud storage (only if stored on our server)
+    if file_record.storage_key:
+        await delete_object(file_record.storage_key)
 
     # Remove from DB
     await db.delete(file_record)

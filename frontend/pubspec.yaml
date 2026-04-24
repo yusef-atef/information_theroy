@@ -26,6 +26,10 @@ dependencies:
   pointycastle: ^3.9.1
   google_fonts: ^6.2.1
   syncfusion_flutter_pdfviewer: any
+  google_sign_in: ^6.2.1
+  googleapis: ^13.1.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.13
+  http: ^1.2.1
 
 dev_dependencies:
   flutter_test:

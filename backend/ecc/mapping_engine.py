@@ -21,10 +21,9 @@ import random
 _PRINTABLE: list[int] = [c for c in range(32, 256) if c != ord('*')]
 
 # Fixed password block length (padded/truncated before RS encoding).
-PASSWORD_BLOCK_LEN: int = 16
+PASSWORD_BLOCK_LEN: int = 64
 
-# Number of RS parity symbols (must be even; t = N_PARITY // 2 errors correctable).
-N_PARITY: int = 4
+
 
 
 def generate_mapping(seed: bytes) -> dict[int, int]:

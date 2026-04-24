@@ -169,6 +169,25 @@ extension AuthApi on Dio {
     return res.data as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> uploadDriveMetadata({
+    required String filename,
+    required String googleFileId,
+    required String ivHex,
+    required String gcmTagHex,
+    required String hmacHex,
+    required int sizeBytes,
+  }) async {
+    final res = await post('/files/upload/drive', data: {
+      'filename': filename,
+      'google_file_id': googleFileId,
+      'iv_hex': ivHex,
+      'gcm_tag_hex': gcmTagHex,
+      'hmac_hex': hmacHex,
+      'size_bytes': sizeBytes,
+    });
+    return res.data as Map<String, dynamic>;
+  }
+
   Future<Response> downloadFileWithMetadata(String fileId) async {
     return await get(
       '/files/download/$fileId',

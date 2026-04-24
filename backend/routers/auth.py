@@ -87,8 +87,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     # Validation after decryption
     if "*" in password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Wildcards not allowed in registration")
-    if not (4 <= len(password) <= 16):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be between 4 and 16 characters")
+    if not (4 <= len(password) <= 64):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be between 4 and 64 characters")
 
     # Check username / email uniqueness
     # ...

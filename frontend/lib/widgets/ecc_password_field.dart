@@ -28,13 +28,16 @@ class _EccPasswordFieldState extends State<EccPasswordField> {
     final text = widget.controller.text;
     final selection = widget.controller.selection;
 
-    // Check budget (max 4 erasures as per implementation plan)
+    // Calculate dynamic budget: 25% of length (min 4, must be even)
+    final totalLen = text.length;
+    final maxWildcards = totalLen < 8 ? 4 : (totalLen ~/ 4) * 2;
+
     final erasures = text.split('').where((c) => c == '*').length;
-    if (erasures >= 4) {
+    if (erasures >= maxWildcards) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Maximum 4 wildcards allowed for ECC correction.'),
-          backgroundColor: Color(0xFFEF4444),
+        SnackBar(
+          content: Text('Maximum $maxWildcards wildcards allowed for this length.'),
+          backgroundColor: const Color(0xFFEF4444),
         ),
       );
       return;

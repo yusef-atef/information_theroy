@@ -23,7 +23,7 @@ from backend.ecc.reed_solomon import rs_encode, rs_decode, ReedSolomonError
 from backend.ecc.mapping_engine import (
     generate_mapping, generate_user_seed,
     encode_password, decode_symbols, generate_inverse_mapping,
-    encode_password_with_erasures, PASSWORD_BLOCK_LEN, N_PARITY,
+    encode_password_with_erasures, PASSWORD_BLOCK_LEN,
 )
 from backend.ecc.ecc_auth import register_password, verify_and_correct
 
@@ -78,7 +78,7 @@ class TestGF256:
 # Reed-Solomon encode / decode
 # ---------------------------------------------------------------------------
 
-N = N_PARITY  # 4 parity symbols → t=2 error correction
+N = 4  # 4 parity symbols → t=2 error correction
 
 
 class TestReedSolomon:

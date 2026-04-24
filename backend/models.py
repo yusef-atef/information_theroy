@@ -84,8 +84,11 @@ class File(Base):
     # Size in bytes of the *plaintext* file
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Firebase Storage / S3 object key
-    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Firebase Storage / S3 / Local object key (optional if using Google Drive)
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Google Drive File ID (for client-side cloud storage)
+    google_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # AES-GCM initialisation vector (hex-encoded, 16 bytes → 32 hex chars)
     iv_hex: Mapped[str] = mapped_column(String(32), nullable=False)

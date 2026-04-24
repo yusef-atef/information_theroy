@@ -249,7 +249,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  '${labels[strength]} — $len / 16 characters',
+                  '${labels[strength]} — $len / 64 characters',
                   style: GoogleFonts.inter(
                       fontSize: 12, color: colors[strength]),
                 ),

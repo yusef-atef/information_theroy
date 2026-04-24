@@ -66,6 +66,7 @@ class FileMetadata(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    google_file_id: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -81,6 +82,16 @@ class UploadResponse(BaseModel):
     filename: str
     size_bytes: int
     message: str = "File encrypted and uploaded successfully"
+
+
+class DriveUploadRequest(BaseModel):
+    filename: str
+    size_bytes: int
+    google_file_id: str
+    iv_hex: str
+    gcm_tag_hex: str
+    hmac_hex: str
+    mime_type: Optional[str] = "application/octet-stream"
 
 
 class DeleteResponse(BaseModel):

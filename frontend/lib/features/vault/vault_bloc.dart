@@ -9,6 +9,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:convert/convert.dart';
+import '../../core/google_drive_service.dart';
+import '../../core/api_client.dart';
 import 'package:cryptography/cryptography.dart';
 import '../../core/api_client.dart';
 import '../../core/models/file_item.dart';
@@ -156,26 +158,50 @@ class VaultBloc extends Bloc<VaultEvent, VaultState> {
       final hmac = await CryptoEngine.generateHmac(plaintextBytes, password);
 
       // 5. Upload encrypted bytes with metadata
-      // Create temporary file for upload
-      final tempDir = await getTemporaryDirectory();
-      final encryptedFile = File('${tempDir.path}/enc_${picked.name}');
-      await encryptedFile.writeAsBytes(secretBox.cipherText);
+      final drive = GoogleDriveService.instance;
+      if (drive.isSignedIn) {
+        // Create temporary file for upload to Google Drive
+        final tempDir = await getTemporaryDirectory();
+        final encryptedFile = File('${tempDir.path}/enc_${picked.name}');
+        await encryptedFile.writeAsBytes(secretBox.cipherText);
+        
+        // Upload to hidden AppData folder
+        final googleFileId = await drive.uploadFile(encryptedFile, picked.name);
+        
+        // Notify our backend (metadata only)
+        await _dio.uploadDriveMetadata(
+          filename: picked.name,
+          googleFileId: googleFileId!,
+          ivHex: hex.encode(secretBox.nonce),
+          gcmTagHex: hex.encode(secretBox.mac.bytes),
+          hmacHex: hex.encode(hmac),
+          sizeBytes: plaintextBytes.length,
+        );
+        
+        // Cleanup temp encrypted file
+        await encryptedFile.delete();
+      } else {
+        // Legacy upload to our server
+        final tempDir = await getTemporaryDirectory();
+        final encryptedFile = File('${tempDir.path}/enc_${picked.name}');
+        await encryptedFile.writeAsBytes(secretBox.cipherText);
 
-      await _dio.uploadFile(
-        filePath: encryptedFile.path,
-        filename: picked.name,
-        ivHex: hex.encode(secretBox.nonce),
-        gcmTagHex: hex.encode(secretBox.mac.bytes),
-        hmacHex: hex.encode(hmac),
-        sizeBytes: plaintextBytes.length,
-      );
+        await _dio.uploadFile(
+          filePath: encryptedFile.path,
+          filename: picked.name,
+          ivHex: hex.encode(secretBox.nonce),
+          gcmTagHex: hex.encode(secretBox.mac.bytes),
+          hmacHex: hex.encode(hmac),
+          sizeBytes: plaintextBytes.length,
+        );
+        await encryptedFile.delete();
+      }
 
       emit(VaultUploading(1));
 
       // 6. Cleanup local files (Zero-Knowledge: leave no traces)
       try {
         await File(picked.path!).delete();
-        await encryptedFile.delete();
       } catch (e) {
         // Log but don't fail the operation if cleanup fails (e.g. permission issue)
         debugPrint('Cleanup error: $e');
@@ -200,7 +226,18 @@ class VaultBloc extends Bloc<VaultEvent, VaultState> {
     try {
       // 1. Download encrypted bytes + metadata from headers
       final response = await _dio.downloadFileWithMetadata(event.file.id);
-      final ciphertext = response.data as List<int>;
+      
+      final googleFileId = response.headers.value('x-google-file-id');
+      Uint8List ciphertext;
+      
+      if (googleFileId != null) {
+        // Fetch from Google Drive
+        final bytes = await GoogleDriveService.instance.downloadFile(googleFileId);
+        ciphertext = Uint8List.fromList(bytes);
+      } else {
+        // Fetch from local server
+        ciphertext = Uint8List.fromList(response.data as List<int>);
+      }
       
       final ivHex = response.headers.value('x-iv') ?? '';
       final tagHex = response.headers.value('x-tag') ?? '';
@@ -272,6 +309,13 @@ class VaultBloc extends Bloc<VaultEvent, VaultState> {
     }
 
     try {
+      final fileItem = _cachedFiles.firstWhere((f) => f.id == event.fileId);
+      
+      // If it's a Drive file, delete from Google first
+      if (fileItem.googleFileId != null) {
+        await GoogleDriveService.instance.deleteFile(fileItem.googleFileId!);
+      }
+
       await _dio.deleteFile(event.fileId);
       _cachedFiles.removeWhere((f) => f.id == event.fileId);
       emit(VaultOperationSuccess(

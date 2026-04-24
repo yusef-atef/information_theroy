@@ -6,6 +6,7 @@ import '../../features/auth/auth_bloc.dart';
 import 'vault_bloc.dart';
 import 'file_card.dart';
 import 'file_preview_screen.dart';
+import '../../core/google_drive_service.dart';
 
 class VaultScreen extends StatelessWidget {
   const VaultScreen({super.key});
@@ -144,13 +145,29 @@ class _VaultView extends StatelessWidget {
                                 color: Colors.white, size: 20),
                           ),
                           const SizedBox(width: 10),
-                          Text(
-                            'SecureCorrect',
-                            style: GoogleFonts.inter(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'SecureCorrect',
+                                style: GoogleFonts.inter(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              if (GoogleDriveService.instance.isSignedIn)
+                                Row(
+                                  children: [
+                                    const Icon(Icons.cloud_done_rounded, color: Color(0xFF10B981), size: 12),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Google Drive Active',
+                                      style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF10B981), fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                            ],
                           ),
                         ],
                       ),
@@ -159,14 +176,56 @@ class _VaultView extends StatelessWidget {
                         icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF64748B)),
                         color: const Color(0xFF1A2235),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        onSelected: (value) {
+                        onSelected: (value) async {
                           if (value == 'logout') {
                             context.read<AuthBloc>().add(LogoutRequested());
                           } else if (value == 'delete') {
                             _confirmDeleteAccount(context);
+                          } else if (value == 'drive') {
+                            final drive = GoogleDriveService.instance;
+                            try {
+                              if (drive.isSignedIn) {
+                                await drive.signOut();
+                              } else {
+                                final ok = await drive.signIn();
+                                if (!ok) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Sign-in cancelled or failed.')),
+                                  );
+                                }
+                              }
+                            } catch (e) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Google Drive Error: $e')),
+                              );
+                            }
+                            // Force refresh
+                            context.read<VaultBloc>().add(LoadFiles());
                           }
                         },
                         itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'drive',
+                            child: Row(
+                              children: [
+                                Icon(
+                                  GoogleDriveService.instance.isSignedIn 
+                                    ? Icons.cloud_off_rounded 
+                                    : Icons.add_to_drive_rounded, 
+                                  color: const Color(0xFF6366F1), 
+                                  size: 20
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  GoogleDriveService.instance.isSignedIn 
+                                    ? 'Disconnect Drive' 
+                                    : 'Connect Google Drive', 
+                                  style: GoogleFonts.inter(color: Colors.white)
+                                ),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuDivider(height: 1),
                           PopupMenuItem(
                             value: 'logout',
                             child: Row(

@@ -5,6 +5,7 @@ class FileItem extends Equatable {
   final String filename;
   final String mimeType;
   final int sizeBytes;
+  final String? googleFileId;
   final DateTime createdAt;
 
   const FileItem({
@@ -12,6 +13,7 @@ class FileItem extends Equatable {
     required this.filename,
     required this.mimeType,
     required this.sizeBytes,
+    this.googleFileId,
     required this.createdAt,
   });
 
@@ -20,6 +22,7 @@ class FileItem extends Equatable {
         filename: json['filename'] as String,
         mimeType: json['mime_type'] as String,
         sizeBytes: json['size_bytes'] as int,
+        googleFileId: json['google_file_id'] as String?,
         createdAt: DateTime.parse(json['created_at'] as String),
       );
 

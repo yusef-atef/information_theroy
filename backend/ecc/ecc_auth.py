@@ -19,7 +19,6 @@ from backend.ecc.mapping_engine import (
     mapping_to_json,
     mapping_from_json,
     PASSWORD_BLOCK_LEN,
-    N_PARITY,
 )
 from backend.ecc.reed_solomon import rs_encode, rs_decode, ReedSolomonError
 
@@ -72,7 +71,15 @@ def register_password(plaintext_password: str) -> RegistrationBundle:
     seed = generate_user_seed()
     mapping = generate_mapping(seed)
     message_symbols = encode_password(plaintext_password, mapping)
-    codeword = rs_encode(message_symbols, N_PARITY)
+    
+    # Calculate dynamic parity: 25% of length -> n_parity = max(4, (len // 4) * 2)
+    actual_len = min(len(plaintext_password), PASSWORD_BLOCK_LEN)
+    n_parity = max(4, (actual_len // 4) * 2)
+    # Must be even
+    if n_parity % 2 != 0:
+        n_parity += 1
+        
+    codeword = rs_encode(message_symbols, n_parity)
 
     return RegistrationBundle(
         codeword=codeword,
@@ -94,10 +101,10 @@ def verify_and_correct(
       - Character errors (wrong character at a known-to-be-wrong position)
       - Erasures (wildcard '*' meaning "I forgot this character")
 
-    Correction capacity (with N_PARITY = 4):
-      - Pure errors:   up to 2
-      - Pure erasures: up to 4
-      - Mixed:         2 * errors + erasures ≤ 4
+    Correction capacity (Dynamic):
+      - Pure errors:   up to n_parity / 2
+      - Pure erasures: up to n_parity
+      - Mixed:         2 * errors + erasures ≤ n_parity
 
     Steps:
         1. Encode the input password into GF(256) symbols (with erasure marking).
@@ -139,10 +146,11 @@ def verify_and_correct(
 
     # 3. RS decode
     try:
+        n_parity = len(stored_codeword) - PASSWORD_BLOCK_LEN
         corrected_message = rs_decode(
             received,
             erasure_positions=erasure_positions,
-            n_parity=N_PARITY,
+            n_parity=n_parity,
         )
     except ReedSolomonError:
         return CorrectionResult(
@@ -162,6 +170,10 @@ def verify_and_correct(
             n_errors_corrected=0,
             n_erasures_filled=0,
         )
+
+    # Append any characters beyond the ECC block length (these are not protected by ECC)
+    if len(input_password) > PASSWORD_BLOCK_LEN:
+        corrected_password += input_password[PASSWORD_BLOCK_LEN:]
 
     # Count actual corrections: positions where input symbol ≠ corrected symbol
     n_errors = sum(
@@ -183,7 +195,8 @@ def quick_check_codeword(stored_codeword: list[int]) -> bool:
     Useful at registration time to catch encoding bugs.
     """
     try:
-        rs_decode(stored_codeword, erasure_positions=[], n_parity=N_PARITY)
+        n_parity = len(stored_codeword) - PASSWORD_BLOCK_LEN
+        rs_decode(stored_codeword, erasure_positions=[], n_parity=n_parity)
         return True
     except ReedSolomonError:
         return False
