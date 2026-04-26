@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# SQLite Database
+backend/*.db
+backend/*.db-journal
+
+# Uploads directory
+backend/uploads/
+
+# Google OAuth secrets
+client_secret_*.json
+
+# Presentation and demo files (large binaries)
+*.mp4
+*.pptx
+*.pdf
+
+# AI / Implementation Notes (Sensitive chat logs)
+Fixing Unsupported Gradle Project.md
+implementation_plan.md
+Presentation.md
+Report.md
+
+# Testing
+.pytest_cache/
+
+# Flutter/Dart (Root level ignores if applicable)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+.packages
+build/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
